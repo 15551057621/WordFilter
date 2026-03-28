@@ -413,14 +413,14 @@ if (isLSE) {
 // ==================== Node.js 测试环境 ====================
 if (isNode) {
     (async () => {
-        console.log('\n🔧 敏感词过滤测试工具\n');
+        console.log('\n敏感词过滤测试工具\n');
 
         await SensitiveFilter.init();
 
         const status = SensitiveFilter.getStatus();
-        console.log(`📊 词库: ${status.wordCount}词 | AC节点: ${status.nodeCount}`);
-        console.log(`⚙️  分片: ${CONFIG.CHUNK_SIZE} | 缓存: ${status.cacheSize}/${CONFIG.CACHE_SIZE}\n`);
-        console.log('💡 输入文本测试，输入 "exit" 退出\n');
+        console.log(`词库: ${status.wordCount}词 | AC节点: ${status.nodeCount}`);
+        console.log(`分片: ${CONFIG.CHUNK_SIZE} | 缓存: ${status.cacheSize}/${CONFIG.CACHE_SIZE}\n`);
+        console.log('输入文本测试，输入 "exit" 退出\n');
 
         const rl = readline.createInterface({
             input: process.stdin,
@@ -429,7 +429,7 @@ if (isNode) {
 
         const test = (input) => {
             if (input === 'exit') {
-                console.log('\n👋 退出测试');
+                console.log('\n退出测试');
                 rl.close();
                 process.exit(0);
                 return;
@@ -445,17 +445,17 @@ if (isNode) {
             const timeEnd = Date.now();
             const memAfter = process.memoryUsage().heapUsed;
 
-            console.log(`\n📝 长度: ${input.length}字符`);
-            console.log(`🔍 结果: ${hasSensitive ? '⚠️ 包含敏感词' : '✅ 通过'}`);
+            console.log(`\n长度: ${input.length}字符`);
+            console.log(`结果: ${hasSensitive ? '⚠️ 包含敏感词' : '✅ 通过'}`);
             if (matched.length > 0) {
-                console.log(`🎯 匹配: ${matched.join(', ')}`);
+                console.log(`匹配: ${matched.join(', ')}`);
             }
             if (hasSensitive && filtered !== input) {
                 const display = filtered.length > 100 ? filtered.substring(0, 100) + '...' : filtered;
-                console.log(`✨ 过滤: ${display}`);
+                console.log(`过滤: ${display}`);
             }
-            console.log(`⏱️  耗时: ${timeEnd - timeStart}ms`);
-            console.log(`💾 内存: ${Math.round((memAfter - memBefore) / 1024)}KB\n`);
+            console.log(`耗时: ${timeEnd - timeStart}ms`);
+            console.log(`内存: ${Math.round((memAfter - memBefore) / 1024)}KB\n`);
         };
 
         rl.on('line', test);
