@@ -1,15 +1,21 @@
 {
-    "name": "sensitive-filter",
+    "name": "sensitive-word-filter",
     "version": "1.0.0",
-    "description": "高性能敏感词过滤系统",
+    "description": "高性能敏感词过滤系统，支持AC自动机算法，百万级词库毫秒响应",
     "main": "index.js",
     "scripts": {
-        "start": "node index.js"
+        "debug": "node --inspect index"
     },
     "keywords": [
         "sensitive-word",
         "filter",
-        "minecraft"
+        "ac-automaton",
+        "chat-filter"
     ],
-    "license": "MIT"
+    "author": "冰凌 & DeepSeek",
+    "license": "MIT",
+    "dependencies": {
+        "file-stream-rotator": "0.6.1",
+        "path": "0.12.7"
+    }
 }

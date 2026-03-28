@@ -11,7 +11,7 @@ const isNode = !isLSE && typeof process !== 'undefined' && process.versions?.nod
 // ==================== 配置模块 ====================
 const CONFIG = Object.freeze({
     // 词库位置
-    WORD_LIST_PATH: isLSE ? './plugins/SensitiveFilter/wordlist/' : './wordlist/',
+    WORD_LIST_PATH: isLSE ? './plugins/WordFilter/wordlist/' : './wordlist/',
 
     // 过滤配置
     REPLACE_CHAR: '喵', // 替换字符 || 当检测到敏感词时，会用这个字符替换敏感词的每个字符
@@ -199,7 +199,7 @@ class SensitiveFilter {
         try {
             const allWords = new Set();
 
-            if (isLSE) {
+            /*if (isLSE) {
                 const files = File.getFilesList(CONFIG.WORD_LIST_PATH);
                 const txtFiles = files.filter(f => f.endsWith('.txt'));
 
@@ -218,11 +218,20 @@ class SensitiveFilter {
 
                 for (const file of txtFiles) {
                     const content = await fs.promises.readFile(path.join(CONFIG.WORD_LIST_PATH, file), 'utf-8');
-                    const words = content.split(/\r?\n/)
-                        .map(w => w.trim().toLowerCase())
-                        .filter(w => w && !w.startsWith('#') && w.length <= 50);
-                    words.forEach(w => allWords.add(w));
+                    
                 }
+            }*/
+
+            // 统一使用 Node.js fs 模块读取文件（LSE-Node 支持）
+            const files = await fs.promises.readdir(CONFIG.WORD_LIST_PATH);
+            const txtFiles = files.filter(f => f.endsWith('.txt'));
+
+            for (const file of txtFiles) {
+                const content = await fs.promises.readFile(path.join(CONFIG.WORD_LIST_PATH, file), 'utf-8');
+                const words = content.split(/\r?\n/)
+                    .map(w => w.trim().toLowerCase())
+                    .filter(w => w && !w.startsWith('#') && w.length <= 50);
+                words.forEach(w => allWords.add(w));
             }
 
             const wordList = [...allWords];
@@ -413,7 +422,7 @@ if (isLSE) {
 // ==================== Node.js 测试环境 ====================
 if (isNode) {
     (async () => {
-        console.log('\n敏感词过滤测试工具\n');
+        console.log('\n🔧 敏感词过滤测试工具\n');
 
         await SensitiveFilter.init();
 
