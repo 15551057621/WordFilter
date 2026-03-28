@@ -1,0 +1,13 @@
+{
+    "entry": "index.js",
+    "name": "WordFilter",
+    "type": "lse-nodejs",
+    "version": "1.0.0",
+    "author": "冰凌呀",
+    "description": "屏蔽词过滤插件",
+    "dependencies": [
+        {
+            "name": "legacy-script-engine-quickjs"
+        }
+    ]
+}
