@@ -1,22 +1,22 @@
-// ==================== 配置文件（文件开头）====================
-const CONFIG = Object.freeze({
-    WORD_LIST_PATH: typeof mc !== 'undefined' ? './plugins/SensitiveFilter/wordlist/' : './wordlist/',
-    REPLACE_CHAR: '喵',
-    ENABLE_CACHE: true,
-    CACHE_SIZE: 10000,
-    BYPASS_OP: true,
-    BLOCK_MESSAGE: '§c消息包含敏感词，请文明发言！',
-    CHUNK_SIZE: 200,              // 分片大小（字符数）
-    MAX_TEXT_LENGTH: 5000,        // 最大检测文本长度
-    TIMEOUT_PER_CHUNK: 10         // 每个分片超时（毫秒）
-});
+//LiteLoaderScript Dev Helper
+/// <reference path="/root/VSCode/Library/JS/index.d.ts" /> 
 
-// ==================== 环境检测 ====================
 const isLSE = typeof mc !== 'undefined' && typeof ll !== 'undefined';
 const isNode = !isLSE && typeof process !== 'undefined' && process.versions?.node;
 
-// ==================== AC自动机 ====================
-class AhoCorasick {
+const CONFIG = Object.freeze({
+    WORD_LIST_PATH: typeof mc !== 'undefined' ? './plugins/SensitiveFilter/wordlist/' : './wordlist/',
+    REPLACE_CHAR: "喵",
+
+    // 性能配置
+    CHUNK_SIZE: 512,
+    ENABLE_CACHE: true,
+    CACHE_SIZE: 5000,
+    MAX_TEXT_LENGTH: 0  // 0 = 不限制
+});
+
+// ==================== 高性能 AC 自动机 ====================
+class HighPerformanceAC {
     constructor() {
         this.root = { next: {}, fail: null, output: null };
         this.size = 0;
@@ -25,10 +25,15 @@ class AhoCorasick {
     build(words) {
         const startTime = Date.now();
 
-        for (const word of words) {
-            if (!word) continue;
+        const sortedWords = [...words]
+            .filter(w => w && w.length <= 50)
+            .sort((a, b) => b.length - a.length);
+
+        // 构建 Trie 树
+        for (const word of sortedWords) {
             let node = this.root;
-            for (const ch of word) {
+            for (let i = 0; i < word.length; i++) {
+                const ch = word[i];
                 if (!node.next[ch]) {
                     node.next[ch] = { next: {}, fail: null, output: null };
                     this.size++;
@@ -38,6 +43,7 @@ class AhoCorasick {
             node.output = word;
         }
 
+        // 构建失败指针
         const queue = [];
         for (const [ch, child] of Object.entries(this.root.next)) {
             child.fail = this.root;
@@ -48,106 +54,95 @@ class AhoCorasick {
             const current = queue.shift();
             for (const [ch, child] of Object.entries(current.next)) {
                 let fail = current.fail;
-                while (fail && !fail.next[ch]) fail = fail.fail;
+                while (fail && !fail.next[ch]) {
+                    fail = fail.fail;
+                }
                 child.fail = fail ? fail.next[ch] : this.root;
+
                 if (child.fail && child.fail.output) {
-                    child.output = child.output || [];
+                    if (!child.output) {
+                        child.output = [];
+                    }
+                    if (!Array.isArray(child.output)) {
+                        child.output = [child.output];
+                    }
                     if (Array.isArray(child.fail.output)) {
-                        child.output = [...(child.output || []), ...child.fail.output];
+                        child.output.push(...child.fail.output);
                     } else {
-                        child.output = [...(child.output || []), child.fail.output];
+                        child.output.push(child.fail.output);
                     }
                 }
                 queue.push(child);
             }
         }
 
-        console.log(`✅ 构建完成 | 词数: ${words.length} | 节点: ${this.size} | 耗时: ${Date.now() - startTime}ms`);
+        console.log(`✅ 构建完成 | 词数: ${sortedWords.length} | 节点: ${this.size} | 耗时: ${Date.now() - startTime}ms`);
     }
 
-    // 单块检测（无超时）
-    _containsChunk(text) {
+    // 极速检测
+    containsFast(text) {
         let node = this.root;
-        for (let i = 0; i < text.length; i++) {
+        const len = text.length;
+
+        for (let i = 0; i < len; i++) {
             const ch = text[i];
-            while (node && !node.next[ch]) node = node.fail;
-            node = node ? node.next[ch] : this.root;
+            let next = node.next[ch];
+            if (next) {
+                node = next;
+                if (node.output) return true;
+                continue;
+            }
+
+            let fail = node.fail;
+            while (fail && !fail.next[ch]) {
+                fail = fail.fail;
+            }
+            node = fail ? fail.next[ch] : this.root;
             if (node && node.output) return true;
         }
         return false;
     }
 
-    // 单块过滤
-    _filterChunk(text, replaceChar = '*') {
-        const result = [...text];
-        const matched = new Array(text.length).fill(false);
+    // 极速过滤
+    filterFast(text, replaceChar = '*') {
+        const result = new Array(text.length);
+        const matched = new Uint8Array(text.length);
         let node = this.root;
 
         for (let i = 0; i < text.length; i++) {
             const ch = text[i];
-            while (node && !node.next[ch]) node = node.fail;
-            node = node ? node.next[ch] : this.root;
+            let next = node.next[ch];
+            if (next) {
+                node = next;
+                if (node.output) {
+                    // 确保 outputs 是数组
+                    const outputs = Array.isArray(node.output) ? node.output : [node.output];
+                    for (const word of outputs) {
+                        const start = i - word.length + 1;
+                        if (start >= 0) {
+                            for (let j = start; j <= i; j++) matched[j] = 1;
+                        }
+                    }
+                }
+                result[i] = ch;
+                continue;
+            }
 
+            let fail = node.fail;
+            while (fail && !fail.next[ch]) {
+                fail = fail.fail;
+            }
+            node = fail ? fail.next[ch] : this.root;
             if (node && node.output) {
                 const outputs = Array.isArray(node.output) ? node.output : [node.output];
                 for (const word of outputs) {
                     const start = i - word.length + 1;
                     if (start >= 0) {
-                        for (let j = start; j <= i; j++) matched[j] = true;
+                        for (let j = start; j <= i; j++) matched[j] = 1;
                     }
                 }
             }
-        }
-
-        for (let i = 0; i < matched.length; i++) {
-            if (matched[i]) result[i] = replaceChar;
-        }
-        return result.join('');
-    }
-
-    contains(text, timeoutMs = CONFIG.TIMEOUT_PER_CHUNK) {
-        if (!text) return false;
-
-        const startTime = Date.now();
-        let node = this.root;
-
-        for (let i = 0; i < text.length; i++) {
-            if (Date.now() - startTime > timeoutMs) {
-                return false;  // 超时返回 false（保守策略）
-            }
-            const ch = text[i];
-            while (node && !node.next[ch]) node = node.fail;
-            node = node ? node.next[ch] : this.root;
-            if (node && node.output) return true;
-        }
-        return false;
-    }
-
-    filter(text, replaceChar = '*', timeoutMs = CONFIG.TIMEOUT_PER_CHUNK) {
-        if (!text) return text;
-
-        const startTime = Date.now();
-        const result = [...text];
-        const matched = new Array(text.length).fill(false);
-        let node = this.root;
-
-        for (let i = 0; i < text.length; i++) {
-            if (Date.now() - startTime > timeoutMs) {
-                return text;  // 超时返回原文
-            }
-            const ch = text[i];
-            while (node && !node.next[ch]) node = node.fail;
-            node = node ? node.next[ch] : this.root;
-
-            if (node && node.output) {
-                const outputs = Array.isArray(node.output) ? node.output : [node.output];
-                for (const word of outputs) {
-                    const start = i - word.length + 1;
-                    if (start >= 0) {
-                        for (let j = start; j <= i; j++) matched[j] = true;
-                    }
-                }
-            }
+            result[i] = ch;
         }
 
         for (let i = 0; i < matched.length; i++) {
@@ -157,10 +152,9 @@ class AhoCorasick {
     }
 }
 
-// ==================== 长文本分片处理器 ====================
-class TextChunker {
-    // 智能分片：尽量在句子边界分割
-    static split(text, chunkSize = CONFIG.CHUNK_SIZE) {
+// ==================== 文本分片器 ====================
+class FastChunker {
+    static split(text, chunkSize) {
         if (text.length <= chunkSize) return [text];
 
         const chunks = [];
@@ -169,21 +163,13 @@ class TextChunker {
         while (start < text.length) {
             let end = Math.min(start + chunkSize, text.length);
 
-            // 如果不是最后一块，尝试在边界处分割
             if (end < text.length) {
-                // 寻找最近的分割点（句号、问号、感叹号、换行、空格）
-                const boundaries = ['.', '。', '?', '？', '!', '！', '\n', '\r', ' ', '，', ','];
-                let bestPos = -1;
-
-                for (let i = end; i > start; i--) {
-                    if (boundaries.includes(text[i])) {
-                        bestPos = i + 1;
+                const boundaryChars = new Set(['.', '。', '?', '？', '!', '！', '\n', ' ', '，', ',', ';', '；', '、']);
+                for (let i = Math.min(end + 10, text.length - 1); i > start; i--) {
+                    if (boundaryChars.has(text[i])) {
+                        end = i + 1;
                         break;
                     }
-                }
-
-                if (bestPos > start) {
-                    end = bestPos;
                 }
             }
 
@@ -195,12 +181,13 @@ class TextChunker {
     }
 }
 
-// ==================== 敏感词过滤器（支持长文本）====================
-class SensitiveFilter {
+// ==================== 高性能敏感词过滤器 ====================
+class HighPerformanceFilter {
     static #ac = null;
     static #isReady = false;
     static #wordCount = 0;
     static #cache = new Map();
+    static #filterCache = new Map();
 
     static async load() {
         const startTime = Date.now();
@@ -209,6 +196,7 @@ class SensitiveFilter {
             const allWords = new Set();
 
             if (isLSE) {
+                // LSE 环境文件读取
                 const files = File.getFilesList(CONFIG.WORD_LIST_PATH);
                 const txtFiles = files.filter(f => f.endsWith('.txt'));
 
@@ -227,6 +215,7 @@ class SensitiveFilter {
                     }
                 }
             } else {
+                // Node.js 环境文件读取
                 const fs = await import('fs').then(m => m.promises);
                 const path = await import('path');
                 const files = await fs.readdir(CONFIG.WORD_LIST_PATH);
@@ -242,13 +231,13 @@ class SensitiveFilter {
             }
 
             const wordList = [...allWords];
-            SensitiveFilter.#wordCount = wordList.length;
+            HighPerformanceFilter.#wordCount = wordList.length;
 
-            SensitiveFilter.#ac = new AhoCorasick();
-            SensitiveFilter.#ac.build(wordList);
-            SensitiveFilter.#isReady = true;
+            HighPerformanceFilter.#ac = new HighPerformanceAC();
+            HighPerformanceFilter.#ac.build(wordList);
+            HighPerformanceFilter.#isReady = true;
 
-            console.log(`📚 加载完成 | 词数: ${SensitiveFilter.#wordCount} | 耗时: ${Date.now() - startTime}ms`);
+            console.log(`📚 加载完成 | 词数: ${HighPerformanceFilter.#wordCount} | 耗时: ${Date.now() - startTime}ms`);
             return true;
 
         } catch (error) {
@@ -257,156 +246,173 @@ class SensitiveFilter {
         }
     }
 
-    // 分片检测长文本
     static contains(text) {
-        if (!SensitiveFilter.#isReady || !text) return false;
+        if (!HighPerformanceFilter.#isReady || !text) return false;
 
-        // 超长文本直接拒绝
-        if (text.length > CONFIG.MAX_TEXT_LENGTH) {
-            console.warn(`⚠️ 文本过长 (${text.length} > ${CONFIG.MAX_TEXT_LENGTH})，拒绝检测`);
-            return true;  // 过长文本视为包含敏感词，拦截
-        }
-
-        // 检查缓存
         if (CONFIG.ENABLE_CACHE) {
-            if (SensitiveFilter.#cache.has(text)) {
-                return SensitiveFilter.#cache.get(text);
-            }
+            const cached = HighPerformanceFilter.#cache.get(text);
+            if (cached !== undefined) return cached;
         }
 
-        // 分片检测
-        const chunks = TextChunker.split(text, CONFIG.CHUNK_SIZE);
-        let hasSensitive = false;
+        const chunks = FastChunker.split(text, CONFIG.CHUNK_SIZE);
+        let result = false;
 
         for (const chunk of chunks) {
-            if (SensitiveFilter.#ac._containsChunk(chunk)) {
-                hasSensitive = true;
+            if (HighPerformanceFilter.#ac.containsFast(chunk)) {
+                result = true;
                 break;
             }
         }
 
-        // 缓存结果
-        if (CONFIG.ENABLE_CACHE && SensitiveFilter.#cache.size < CONFIG.CACHE_SIZE) {
-            SensitiveFilter.#cache.set(text, hasSensitive);
-        }
-
-        return hasSensitive;
-    }
-
-    // 分片过滤长文本
-    static filter(text) {
-        if (!SensitiveFilter.#isReady || !text) return text;
-
-        if (text.length > CONFIG.MAX_TEXT_LENGTH) {
-            return text.substring(0, CONFIG.MAX_TEXT_LENGTH) + '...(过长已截断)';
-        }
-
-        // 检查缓存
-        if (CONFIG.ENABLE_CACHE) {
-            const cached = SensitiveFilter.#cache.get(text);
-            if (cached !== undefined && typeof cached === 'string') {
-                return cached;
-            }
-        }
-
-        // 分片过滤
-        const chunks = TextChunker.split(text, CONFIG.CHUNK_SIZE);
-        const filteredChunks = [];
-
-        for (const chunk of chunks) {
-            filteredChunks.push(SensitiveFilter.#ac._filterChunk(chunk, CONFIG.REPLACE_CHAR));
-        }
-
-        const result = filteredChunks.join('');
-
-        // 缓存结果
-        if (CONFIG.ENABLE_CACHE && SensitiveFilter.#cache.size < CONFIG.CACHE_SIZE) {
-            SensitiveFilter.#cache.set(text, result);
+        if (CONFIG.ENABLE_CACHE && HighPerformanceFilter.#cache.size < CONFIG.CACHE_SIZE) {
+            HighPerformanceFilter.#cache.set(text, result);
         }
 
         return result;
     }
 
-    // 获取匹配的敏感词（用于调试）
-    static match(text) {
-        if (!SensitiveFilter.#isReady || !text) return [];
-        if (text.length > CONFIG.MAX_TEXT_LENGTH) return [];
+    static filter(text) {
+        if (!HighPerformanceFilter.#isReady || !text) return text;
 
-        const matchedWords = new Set();
-        const chunks = TextChunker.split(text, CONFIG.CHUNK_SIZE);
-
-        for (const chunk of chunks) {
-            let node = SensitiveFilter.#ac.root;
-            for (let i = 0; i < chunk.length; i++) {
-                const ch = chunk[i];
-                while (node && !node.next[ch]) node = node.fail;
-                node = node ? node.next[ch] : SensitiveFilter.#ac.root;
-                if (node && node.output) {
-                    const outputs = Array.isArray(node.output) ? node.output : [node.output];
-                    outputs.forEach(w => matchedWords.add(w));
-                }
-            }
+        if (CONFIG.ENABLE_CACHE) {
+            const cached = HighPerformanceFilter.#filterCache.get(text);
+            if (cached !== undefined) return cached;
         }
 
-        return [...matchedWords];
+        const chunks = FastChunker.split(text, CONFIG.CHUNK_SIZE);
+        const filtered = chunks.map(chunk =>
+            HighPerformanceFilter.#ac.filterFast(chunk, CONFIG.REPLACE_CHAR)
+        ).join('');
+
+        if (CONFIG.ENABLE_CACHE && HighPerformanceFilter.#filterCache.size < CONFIG.CACHE_SIZE) {
+            HighPerformanceFilter.#filterCache.set(text, filtered);
+        }
+
+        return filtered;
     }
 
     static getStatus() {
         return {
-            wordCount: SensitiveFilter.#wordCount,
-            cacheSize: SensitiveFilter.#cache.size,
-            nodeCount: SensitiveFilter.#ac?.size || 0,
-            chunkSize: CONFIG.CHUNK_SIZE,
-            maxTextLength: CONFIG.MAX_TEXT_LENGTH
+            isReady: HighPerformanceFilter.#isReady,
+            wordCount: HighPerformanceFilter.#wordCount,
+            cacheSize: HighPerformanceFilter.#cache.size,
+            filterCacheSize: HighPerformanceFilter.#filterCache.size,
+            nodeCount: HighPerformanceFilter.#ac?.size || 0,
+            config: {
+                chunkSize: CONFIG.CHUNK_SIZE,
+                maxTextLength: CONFIG.MAX_TEXT_LENGTH || '无限制',
+                cacheEnabled: CONFIG.ENABLE_CACHE
+            }
         };
+    }
+
+    static clearCache() {
+        HighPerformanceFilter.#cache.clear();
+        HighPerformanceFilter.#filterCache.clear();
+        console.log('缓存已清空');
     }
 }
 
 // ==================== LSE 环境 ====================
 if (isLSE) {
+    let isLoaded = false;
+
     mc.listen('onServerStarted', () => {
         console.log('[敏感词过滤] 加载词库...');
-        SensitiveFilter.load();
+        HighPerformanceFilter.load().then(() => {
+            isLoaded = true;
+            const status = HighPerformanceFilter.getStatus();
+            console.log(`[敏感词过滤] 就绪 | 词库: ${status.wordCount} | 无长度限制`);
+        }).catch(err => {
+            console.error('[敏感词过滤] 加载失败:', err);
+        });
     });
 
     mc.listen('onChat', (player, msg) => {
-        if (CONFIG.BYPASS_OP && player.isOP()) return true;
+        if (!isLoaded) return true;
+        if (player.isOP()) return true;
 
-        // 超长文本直接拦截
-        if (msg.length > CONFIG.MAX_TEXT_LENGTH) {
-            player.tell(`§c消息过长 (${msg.length}/${CONFIG.MAX_TEXT_LENGTH})，请缩短后重试`);
-            return false;
-        }
-
-        if (SensitiveFilter.contains(msg)) {
-            player.tell(CONFIG.BLOCK_MESSAGE);
+        if (HighPerformanceFilter.contains(msg)) {
             return false;
         }
         return true;
     });
 
-    ll.exports((text) => SensitiveFilter.contains(text), 'SensitiveFilter', 'contains');
-    ll.exports((text) => SensitiveFilter.filter(text), 'SensitiveFilter', 'filter');
-    ll.exports((text) => SensitiveFilter.match(text), 'SensitiveFilter', 'match');
+    ll.exports((text) => HighPerformanceFilter.contains(text), 'SensitiveFilter', 'contains');
+    ll.exports((text) => HighPerformanceFilter.filter(text), 'SensitiveFilter', 'filter');
+    ll.exports(() => HighPerformanceFilter.getStatus(), 'SensitiveFilter', 'status');
+    ll.exports(() => HighPerformanceFilter.clearCache(), 'SensitiveFilter', 'clearCache');
 
-    console.log('[敏感词过滤] 插件已加载 | 分片大小: ' + CONFIG.CHUNK_SIZE);
+    console.log('[敏感词过滤] 插件已加载');
 }
 
-// ==================== Node.js 测试环境 ====================
+// ==================== Node.js 测试 ====================
 if (isNode) {
     (async () => {
-        console.log('\n🔧 敏感词过滤测试工具（支持长文本）\n');
+        console.log('\n⚡ 敏感词过滤测试（无长度限制）\n');
 
-        await SensitiveFilter.load();
+        const success = await HighPerformanceFilter.load();
 
-        if (!SensitiveFilter.getStatus().wordCount) {
-            console.log('❌ 词库加载失败');
+        if (!success) {
+            console.log('❌ 词库加载失败，请检查 wordlist 目录');
             process.exit(1);
         }
 
-        const status = SensitiveFilter.getStatus();
-        console.log(`📊 词库: ${status.wordCount}词 | AC节点: ${status.nodeCount}`);
-        console.log(`⚙️  分片大小: ${status.chunkSize}字符 | 最大长度: ${status.maxTextLength}字符\n`);
+        const status = HighPerformanceFilter.getStatus();
+        console.log(`📊 词库: ${status.wordCount}词 | 节点: ${status.nodeCount}`);
+        console.log(`⚙️  分片: ${status.config.chunkSize} | 长度限制: ${status.config.maxTextLength}`);
+        console.log(`💾 缓存: ${status.config.cacheEnabled ? '启用' : '禁用'}\n`);
+
+        // 测试词库是否有效
+        console.log('🧪 词库有效性测试...');
+        const testWords = ['敏感词1', '敏感词2', '敏感词3'];
+        for (const word of testWords) {
+            const result = HighPerformanceFilter.contains(word);
+            console.log(`   "${word}": ${result ? '✅ 检测到' : '❌ 未检测到'}`);
+        }
+
+        // 长文本测试
+        console.log('\n🧪 长文本测试...');
+        const longText = '这是一段非常长的文本' + '包含敏感词1的内容'.repeat(100);
+        console.log(`   文本长度: ${longText.length}字符`);
+
+        const start = Date.now();
+        const result = HighPerformanceFilter.contains(longText);
+        const elapsed = Date.now() - start;
+        console.log(`   检测结果: ${result ? '⚠️ 包含敏感词' : '✅ 通过'}`);
+        console.log(`   耗时: ${elapsed}ms\n`);
+
+        // 性能测试
+        console.log('🧪 性能测试 (100次检测)...');
+        const testTexts = [
+            '这是一段正常文本',
+            '包含肛门的文本',
+            '这是一段正常文本安安安安安安安安安安安安安',
+            '包含肛门的文本aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+        ];
+
+        const totalTests = 10000;
+        const perfStart = Date.now();
+        let detectedCount = 0;
+
+        for (let i = 0; i < totalTests; i++) {
+            const text = testTexts[i % testTexts.length];
+            if (HighPerformanceFilter.contains(text)) detectedCount++;
+        }
+
+        const perfElapsed = Date.now() - perfStart;
+        console.log(`   总请求: ${totalTests}`);
+        console.log(`   检测到敏感词: ${detectedCount}`);
+        console.log(`   总耗时: ${perfElapsed}ms`);
+        console.log(`   平均延迟: ${(perfElapsed / totalTests).toFixed(2)}ms/次`);
+
+        // 内存状态
+        const mem = process.memoryUsage();
+        console.log(`\n💾 内存: ${Math.round(mem.heapUsed / 1024 / 1024)}MB / ${Math.round(mem.rss / 1024 / 1024)}MB`);
+
+        // 交互模式
+        console.log('\n💡 输入文本测试，输入 "exit" 退出');
+        console.log('📌 无长度限制，支持任意长度文本\n');
 
         const readline = await import('readline');
         const rl = readline.createInterface({
@@ -414,49 +420,28 @@ if (isNode) {
             output: process.stdout
         });
 
-        console.log('💡 输入文本测试，输入 "exit" 退出');
-        console.log('📌 支持长文本，自动分片检测\n');
-
         const test = (input) => {
             if (input === 'exit') {
-                console.log('\n👋 退出测试');
+                console.log('\n👋 退出');
                 rl.close();
                 process.exit(0);
                 return;
             }
 
-            const memBefore = process.memoryUsage().heapUsed;
-            const timeStart = Date.now();
+            const perfStart = Date.now();
+            const contains = HighPerformanceFilter.contains(input);
+            const filtered = HighPerformanceFilter.filter(input);
+            const elapsed = Date.now() - perfStart;
 
-            // 显示分片信息
-            const chunks = TextChunker.split(input, CONFIG.CHUNK_SIZE);
-            const chunkInfo = chunks.length > 1 ? ` (分${chunks.length}片)` : '';
-
-            const contains = SensitiveFilter.contains(input);
-            const filtered = SensitiveFilter.filter(input);
-            const matched = SensitiveFilter.match(input);
-
-            const timeEnd = Date.now();
-            const memAfter = process.memoryUsage().heapUsed;
-
-            console.log(`\n📝 输入长度: ${input.length}字符${chunkInfo}`);
+            console.log(`\n📝 长度: ${input.length}字符 | 耗时: ${elapsed}ms`);
             console.log(`🔍 结果: ${contains ? '⚠️ 包含敏感词' : '✅ 通过'}`);
-            if (matched.length > 0) {
-                console.log(`🎯 匹配词: ${matched.slice(0, 5).join(', ')}${matched.length > 5 ? ` ...等${matched.length}个` : ''}`);
-            }
             if (contains && filtered !== input) {
-                console.log(`✨ 过滤: ${filtered.length > 100 ? filtered.substring(0, 100) + '...' : filtered}`);
+                const displayFiltered = filtered.length > 100 ? filtered.substring(0, 100) + '...' : filtered;
+                console.log(`✨ 过滤: ${displayFiltered}`);
             }
-            console.log(`⏱️  耗时: ${timeEnd - timeStart}ms`);
-            console.log(`💾 内存: ${Math.round((memAfter - memBefore) / 1024)}KB\n`);
-
-            ask();
+            console.log('');
         };
 
-        const ask = () => {
-            rl.question('> ', test);
-        };
-
-        ask();
+        rl.on('line', test);
     })();
 }
