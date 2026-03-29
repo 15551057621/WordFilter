@@ -59,12 +59,12 @@ WordFilter/
 
 ```javascript
 const WFLib = { // 导入 API
-    contains = ll.imports('WordFilter', 'contains'),
-    filter = ll.imports('WordFilter', 'filter'),
-    match = ll.imports('WordFilter', 'match'),
-    status = ll.imports('WordFilter', 'status'),
-    reload = ll.imports('WordFilter', 'reload'),
-    clearCache = ll.imports('WordFilter', 'clearCache')
+    contains: ll.imports('WordFilter', 'contains'),
+    filter: ll.imports('WordFilter', 'filter'),
+    match: ll.imports('WordFilter', 'match'),
+    status: ll.imports('WordFilter', 'status'),
+    reload: ll.imports('WordFilter', 'reload'),
+    clearCache: ll.imports('WordFilter', 'clearCache')
 }
 ```
 

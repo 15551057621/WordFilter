@@ -8,10 +8,10 @@ const readline = require('readline');
 const isLSE = typeof mc !== 'undefined' && typeof ll !== 'undefined';
 const isNode = !isLSE && typeof process !== 'undefined' && process.versions?.node;
 
-// ==================== 配置模块 ====================
 const CONFIG = Object.freeze({
     // 词库位置
     WORD_LIST_PATH: isLSE ? './plugins/WordFilter/wordlist/' : './wordlist/',
+
 
     // 过滤配置
     REPLACE_CHAR: '喵', // 替换字符 || 当检测到敏感词时，会用这个字符替换敏感词的每个字符
@@ -21,12 +21,20 @@ const CONFIG = Object.freeze({
     MAX_TEXT_LENGTH: 0,  // 最大检测长度 || 超过此长度的文本直接拦截 0 = 不限制
 });
 
-// ==================== 日志工具 ====================
-const Logger = {
+let Logger = {
     info: (...args) => console.log('[SensitiveFilter]', ...args),
     warn: (...args) => console.warn('[SensitiveFilter]', ...args),
     error: (...args) => console.error('[SensitiveFilter]', ...args)
 };
+
+if (isLSE) {
+    logger.setTitle("SensitiveFilter");
+    Logger = {
+        info: (...args) => logger.log(...args),
+        warn: (...args) => logger.warn(...args),
+        error: (...args) => logger.error(...args)
+    }
+}
 
 // ==================== AC 自动机核心引擎 ====================
 class ACAutomaton {
@@ -38,12 +46,10 @@ class ACAutomaton {
     build(words) {
         const startTime = Date.now();
 
-        // 过滤并排序（长词优先）
         const validWords = [...words]
             .filter(w => w && w.length <= 50)
             .sort((a, b) => b.length - a.length);
 
-        // 构建 Trie 树
         for (const word of validWords) {
             let node = this.root;
             for (let i = 0; i < word.length; i++) {
@@ -57,7 +63,6 @@ class ACAutomaton {
             node.output = word;
         }
 
-        // 构建失败指针（BFS）
         const queue = [];
         for (const [ch, child] of Object.entries(this.root.next)) {
             child.fail = this.root;
@@ -73,7 +78,6 @@ class ACAutomaton {
                 }
                 child.fail = fail ? fail.next[ch] : this.root;
 
-                // 合并输出
                 if (child.fail && child.fail.output) {
                     if (!child.output) child.output = [];
                     if (!Array.isArray(child.output)) child.output = [child.output];
@@ -91,7 +95,6 @@ class ACAutomaton {
         return this;
     }
 
-    // 快速检测
     contains(text) {
         let node = this.root;
         for (let i = 0; i < text.length; i++) {
@@ -111,7 +114,6 @@ class ACAutomaton {
         return false;
     }
 
-    // 快速过滤
     filter(text, replaceChar = '*') {
         const result = new Array(text.length);
         const matched = new Uint8Array(text.length);
@@ -192,50 +194,55 @@ class SensitiveFilter {
     static #detectCache = new Map();
     static #filterCache = new Map();
 
-    // 初始化
     static async init() {
         if (this.#isReady) return true;
 
         try {
             const allWords = new Set();
 
-            /*if (isLSE) {
-                const files = File.getFilesList(CONFIG.WORD_LIST_PATH);
-                const txtFiles = files.filter(f => f.endsWith('.txt'));
-
-                for (const file of txtFiles) {
-                    const content = File.readFrom(CONFIG.WORD_LIST_PATH + file);
-                    if (content) {
-                        const words = content.split(/\r?\n/)
-                            .map(w => w.trim().toLowerCase())
-                            .filter(w => w && !w.startsWith('#') && w.length <= 50);
-                        words.forEach(w => allWords.add(w));
-                    }
-                }
+            // 获取词库路径
+            let wordlistPath;
+            if (isLSE) {
+                wordlistPath = path.join(process.cwd(), 'plugins', 'WordFilter', 'wordlist');
             } else {
-                const files = await fs.promises.readdir(CONFIG.WORD_LIST_PATH);
-                const txtFiles = files.filter(f => f.endsWith('.txt'));
+                wordlistPath = CONFIG.WORD_LIST_PATH;
+            }
 
-                for (const file of txtFiles) {
-                    const content = await fs.promises.readFile(path.join(CONFIG.WORD_LIST_PATH, file), 'utf-8');
-                    
-                }
-            }*/
+            Logger.info(`词库目录: ${wordlistPath}`);
 
-            // 统一使用 Node.js fs 模块读取文件（LSE-Node 支持）
-            const files = await fs.promises.readdir(CONFIG.WORD_LIST_PATH);
+            // 检查目录是否存在
+            try {
+                await fs.promises.access(wordlistPath);
+            } catch (e) {
+                Logger.error(`词库目录不存在: ${wordlistPath}`);
+                Logger.info('请创建目录并放入 .txt 词库文件');
+                return false;
+            }
+
+            const files = await fs.promises.readdir(wordlistPath);
             const txtFiles = files.filter(f => f.endsWith('.txt'));
 
+            if (txtFiles.length === 0) {
+                Logger.warn(`未找到 .txt 词库文件`);
+                return false;
+            }
+
             for (const file of txtFiles) {
-                const content = await fs.promises.readFile(path.join(CONFIG.WORD_LIST_PATH, file), 'utf-8');
+                const content = await fs.promises.readFile(path.join(wordlistPath, file), 'utf-8');
                 const words = content.split(/\r?\n/)
                     .map(w => w.trim().toLowerCase())
                     .filter(w => w && !w.startsWith('#') && w.length <= 50);
                 words.forEach(w => allWords.add(w));
+                Logger.info(`加载: ${file} -> ${words.length} 词`);
             }
 
             const wordList = [...allWords];
             this.#wordCount = wordList.length;
+
+            if (this.#wordCount === 0) {
+                Logger.error('词库为空');
+                return false;
+            }
 
             this.#engine = new ACAutomaton();
             this.#engine.build(wordList);
@@ -245,22 +252,19 @@ class SensitiveFilter {
             return true;
 
         } catch (error) {
-            Logger.error('初始化失败:', error);
+            Logger.error('初始化失败:', error.message);
             return false;
         }
     }
 
-    // 检测文本
     static detect(text) {
         if (!this.#isReady || !text) return false;
 
-        // 缓存检查
         if (CONFIG.ENABLE_CACHE) {
             const cached = this.#detectCache.get(text);
             if (cached !== undefined) return cached;
         }
 
-        // 分片检测
         const chunks = TextChunker.split(text, CONFIG.CHUNK_SIZE);
         let result = false;
         for (const chunk of chunks) {
@@ -270,7 +274,6 @@ class SensitiveFilter {
             }
         }
 
-        // 缓存结果
         if (CONFIG.ENABLE_CACHE && this.#detectCache.size < CONFIG.CACHE_SIZE) {
             this.#detectCache.set(text, result);
         }
@@ -278,7 +281,6 @@ class SensitiveFilter {
         return result;
     }
 
-    // 过滤文本
     static sanitize(text) {
         if (!this.#isReady || !text) return text;
 
@@ -299,7 +301,6 @@ class SensitiveFilter {
         return result;
     }
 
-    // 获取匹配的敏感词列表
     static match(text) {
         if (!this.#isReady || !text) return [];
 
@@ -333,7 +334,6 @@ class SensitiveFilter {
         return [...matched];
     }
 
-    // 获取状态
     static getStatus() {
         return {
             isReady: this.#isReady,
@@ -344,14 +344,12 @@ class SensitiveFilter {
         };
     }
 
-    // 清空缓存
     static clearCache() {
         this.#detectCache.clear();
         this.#filterCache.clear();
         Logger.info('缓存已清空');
     }
 
-    // 重新加载
     static async reload() {
         this.#isReady = false;
         this.#detectCache.clear();
@@ -361,60 +359,32 @@ class SensitiveFilter {
     }
 }
 
+// ==================== 立即初始化 ====================
+// 同步执行初始化（不使用事件监听）
+let initPromise = null;
+
+function startInit() {
+    if (initPromise) return initPromise;
+    initPromise = SensitiveFilter.init();
+    return initPromise;
+}
+
+// 立即开始初始化
+// startInit();
+
 // ==================== LSE 环境 ====================
 if (isLSE) {
-    // 服务器启动时初始化
-    mc.listen('onServerStarted', async () => {
-        Logger.info('正在初始化...');
-        await SensitiveFilter.init();
-        const status = SensitiveFilter.getStatus();
-        Logger.info(`就绪 | 词库: ${status.wordCount}词 | 缓存: ${status.cacheSize}/${CONFIG.CACHE_SIZE}`);
+    SensitiveFilter.init().catch(err => {
+        Logger.error('初始化失败:', err);
     });
-
-    // ==================== 导出 API 文档 ====================
-    /**
-     * @module SensitiveFilter
-     * @description 敏感词过滤插件 API
-     * 
-     * @example
-     * // 导入 API
-     * const contains = ll.imports('SensitiveFilter', 'contains');
-     * const filter = ll.imports('SensitiveFilter', 'filter');
-     * const match = ll.imports('SensitiveFilter', 'match');
-     * const status = ll.imports('SensitiveFilter', 'status');
-     * const reload = ll.imports('SensitiveFilter', 'reload');
-     * const clearCache = ll.imports('SensitiveFilter', 'clearCache');
-     * 
-     * // 检测是否包含敏感词
-     * if (contains('这是一段文本')) {
-     *     log('包含敏感词');
-     * }
-     * 
-     * // 过滤敏感词
-     * const clean = filter('这是一段包含敏感词的文本');
-     * // 返回: "这是一段包含***的文本"
-     * 
-     * // 获取匹配的敏感词列表
-     * const words = match('包含敏感词1和敏感词2的文本');
-     * // 返回: ["敏感词1", "敏感词2"]
-     * 
-     * // 获取过滤器状态
-     * const stats = status();
-     * // 返回: { isReady, wordCount, cacheSize, nodeCount }
-     * 
-     * // 重新加载词库
-     * await reload();
-     * 
-     * // 清空缓存
-     * clearCache();
-     */
-
-    ll.exports((text) => SensitiveFilter.detect(text), 'SensitiveFilter', 'contains');
-    ll.exports((text) => SensitiveFilter.sanitize(text), 'SensitiveFilter', 'filter');
-    ll.exports((text) => SensitiveFilter.match(text), 'SensitiveFilter', 'match');
-    ll.exports(() => SensitiveFilter.getStatus(), 'SensitiveFilter', 'status');
-    ll.exports(() => SensitiveFilter.reload(), 'SensitiveFilter', 'reload');
-    ll.exports(() => SensitiveFilter.clearCache(), 'SensitiveFilter', 'clearCache');
+    
+    // 导出 API
+    ll.exports((text) => SensitiveFilter.detect(text), 'WordFilter', 'contains');
+    ll.exports((text) => SensitiveFilter.sanitize(text), 'WordFilter', 'filter');
+    ll.exports((text) => SensitiveFilter.match(text), 'WordFilter', 'match');
+    ll.exports(() => SensitiveFilter.getStatus(), 'WordFilter', 'status');
+    ll.exports(() => SensitiveFilter.reload(), 'WordFilter', 'reload');
+    ll.exports(() => SensitiveFilter.clearCache(), 'WordFilter', 'clearCache');
 
     Logger.info('插件已加载 | 导出 API: contains, filter, match, status, reload, clearCache');
 }
@@ -422,7 +392,7 @@ if (isLSE) {
 // ==================== Node.js 测试环境 ====================
 if (isNode) {
     (async () => {
-        console.log('\n🔧 敏感词过滤测试工具\n');
+        console.log('\n敏感词过滤测试工具\n');
 
         await SensitiveFilter.init();
 
@@ -469,4 +439,21 @@ if (isNode) {
 
         rl.on('line', test);
     })();
+}
+
+// ==================== 导出模块 ====================
+if (isNode) {
+    module.exports = {
+        contains: (text) => SensitiveFilter.detect(text),
+        filter: (text) => SensitiveFilter.sanitize(text),
+        match: (text) => SensitiveFilter.match(text),
+        status: () => SensitiveFilter.getStatus(),
+        reload: () => SensitiveFilter.reload(),
+        clearCache: () => SensitiveFilter.clearCache(),
+        SensitiveFilter,
+        ACAutomaton,
+        TextChunker,
+        version: '1.0.0',
+        config: CONFIG
+    };
 }
