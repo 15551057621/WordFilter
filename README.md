@@ -58,14 +58,17 @@ WordFilter/
 ## 🔌 API 接口文档
 
 ```javascript
-const WFLib = { // 导入 API
-    contains: ll.imports('WordFilter', 'contains'),
-    filter: ll.imports('WordFilter', 'filter'),
-    match: ll.imports('WordFilter', 'match'),
-    status: ll.imports('WordFilter', 'status'),
-    reload: ll.imports('WordFilter', 'reload'),
-    clearCache: ll.imports('WordFilter', 'clearCache')
-}
+let WFLib = {};
+mc.listen('onServerStarted', () => {
+    WFLib = { // 导入 API
+        contains: ll.imports('WordFilter', 'contains'),
+        filter: ll.imports('WordFilter', 'filter'),
+        match: ll.imports('WordFilter', 'match'),
+        status: ll.imports('WordFilter', 'status'),
+        reload: ll.imports('WordFilter', 'reload'),
+        clearCache: ll.imports('WordFilter', 'clearCache')
+    }
+})
 ```
 
 #### 检测文本是否包含敏感词
